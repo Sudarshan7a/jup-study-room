@@ -23,6 +23,7 @@ const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key-change-in-producti
 const users = new Map();
 const rooms = new Map();
 const userSessions = new Map();
+const userConnections = new Map(); // added for P2P routing
 
 // User authentication routes
 app.post('/api/auth/register', async (req, res) => {
@@ -42,7 +43,7 @@ app.post('/api/auth/register', async (req, res) => {
     password: hashedPassword,
   });
 
-  const token = jwt.sign({ id: userId, email }, JWT_SECRET, { expiresIn: '7d' });
+  const token = jwt.sign({ id: userId, email, username }, JWT_SECRET, { expiresIn: '7d' });
   res.json({ token, user: { id: userId, username, email } });
 });
 
@@ -54,7 +55,7 @@ app.post('/api/auth/login', async (req, res) => {
     return res.status(401).json({ error: 'Invalid credentials' });
   }
 
-  const token = jwt.sign({ id: user.id, email }, JWT_SECRET, { expiresIn: '7d' });
+  const token = jwt.sign({ id: user.id, email, username: user.username }, JWT_SECRET, { expiresIn: '7d' });
   res.json({ token, user: { id: user.id, username: user.username, email } });
 });
 
@@ -63,6 +64,7 @@ app.get('/api/rooms', (req, res) => {
   const roomList = Array.from(rooms.values()).map(room => ({
     id: room.id,
     name: room.name,
+    createdBy: room.createdBy,
     members: room.members.length,
     maxMembers: room.maxMembers,
     focusMode: room.focusMode,
@@ -71,13 +73,14 @@ app.get('/api/rooms', (req, res) => {
 });
 
 app.post('/api/rooms', (req, res) => {
-  const { name, maxMembers = 10 } = req.body;
+  const { name, maxMembers = 10, userId } = req.body;
   const roomId = Date.now().toString();
 
   rooms.set(roomId, {
     id: roomId,
     name,
     maxMembers,
+    createdBy: userId,
     members: [],
     messages: [],
     focusMode: false,
@@ -89,6 +92,22 @@ app.post('/api/rooms', (req, res) => {
   });
 
   res.json({ roomId });
+});
+
+app.delete('/api/rooms/:roomId', (req, res) => {
+  const room = rooms.get(req.params.roomId);
+  const { userId } = req.body;
+  
+  if (!room) return res.status(404).json({ error: 'Room not found' });
+  if (room.createdBy !== userId) return res.status(403).json({ error: 'Only the host can delete this room' });
+  
+  // Notify everyone in the room to leave
+  broadcastToRoom(req.params.roomId, { type: 'room_deleted' });
+  
+  if (room.timerInterval) clearInterval(room.timerInterval);
+  rooms.delete(req.params.roomId);
+  
+  res.json({ success: true });
 });
 
 app.get('/api/rooms/:roomId', (req, res) => {
@@ -122,6 +141,7 @@ wss.on('connection', (ws) => {
           try {
             const decoded = jwt.verify(message.token, JWT_SECRET);
             currentUser = decoded;
+            userConnections.set(currentUser.id, ws);
             ws.send(JSON.stringify({ type: 'auth_success', user: decoded }));
           } catch (err) {
             ws.send(JSON.stringify({ type: 'auth_error', error: 'Invalid token' }));
@@ -142,8 +162,12 @@ wss.on('connection', (ws) => {
           }
 
           currentRoom = message.roomId;
-          const member = { id: currentUser.id, username: currentUser.email, status: 'studying' };
-          room.members.push(member);
+          
+          let member = room.members.find(m => m.id === currentUser.id);
+          if (!member) {
+            member = { id: currentUser.id, username: currentUser.username, status: 'studying' };
+            room.members.push(member);
+          }
 
           // Notify all users in room
           broadcastToRoom(currentRoom, {
@@ -167,7 +191,7 @@ wss.on('connection', (ws) => {
           const chatMsg = {
             id: Date.now().toString(),
             userId: currentUser.id,
-            username: currentUser.email,
+            username: currentUser.username,
             text: message.text,
             timestamp: new Date().toISOString(),
           };
@@ -182,35 +206,43 @@ wss.on('connection', (ws) => {
         case 'pomodoro_start':
           if (!currentRoom) return;
           const room_p = rooms.get(currentRoom);
+          if (room_p.timerInterval) clearInterval(room_p.timerInterval);
+          
           room_p.pomodoroState.isRunning = true;
           room_p.pomodoroState.timeLeft = message.duration || 1500;
           room_p.pomodoroState.isBreak = message.isBreak || false;
 
+          room_p.timerInterval = setInterval(() => {
+            room_p.pomodoroState.timeLeft -= 1;
+            if (room_p.pomodoroState.timeLeft <= 0) {
+              room_p.pomodoroState.isRunning = false;
+              clearInterval(room_p.timerInterval);
+            }
+            broadcastToRoom(currentRoom, {
+              type: 'pomodoro_tick',
+              timeLeft: room_p.pomodoroState.timeLeft,
+              isRunning: room_p.pomodoroState.isRunning
+            });
+          }, 1000);
+
           broadcastToRoom(currentRoom, {
             type: 'pomodoro_update',
             pomodoroState: room_p.pomodoroState,
-            initiatedBy: currentUser.email,
+            initiatedBy: currentUser.username,
           });
           break;
 
         case 'pomodoro_tick':
-          if (!currentRoom) return;
-          const room_t = rooms.get(currentRoom);
-          room_t.pomodoroState.timeLeft -= 1;
-
-          if (room_t.pomodoroState.timeLeft <= 0) {
-            room_t.pomodoroState.isRunning = false;
-          }
-
-          broadcastToRoom(currentRoom, {
-            type: 'pomodoro_tick',
-            timeLeft: room_t.pomodoroState.timeLeft,
-          });
+          // Handled by backend interval now
           break;
 
         case 'pomodoro_stop':
           if (!currentRoom) return;
-          rooms.get(currentRoom).pomodoroState.isRunning = false;
+          const currentRoomObj = rooms.get(currentRoom);
+          currentRoomObj.pomodoroState.isRunning = false;
+          if (currentRoomObj.timerInterval) {
+            clearInterval(currentRoomObj.timerInterval);
+          }
 
           broadcastToRoom(currentRoom, {
             type: 'pomodoro_stop',
@@ -224,7 +256,7 @@ wss.on('connection', (ws) => {
           broadcastToRoom(currentRoom, {
             type: 'focus_mode_toggled',
             focusMode: rooms.get(currentRoom).focusMode,
-            toggledBy: currentUser.email,
+            toggledBy: currentUser.username,
           });
           break;
 
@@ -242,6 +274,17 @@ wss.on('connection', (ws) => {
             status: message.status,
           });
           break;
+          
+        case 'webrtc_signal':
+          const targetWs = userConnections.get(message.targetId);
+          if (targetWs && targetWs.readyState === WebSocket.OPEN) {
+            targetWs.send(JSON.stringify({
+              type: 'webrtc_signal',
+              callerId: currentUser.id,
+              signal: message.signal,
+            }));
+          }
+          break;
       }
     } catch (error) {
       console.error('WebSocket error:', error);
@@ -249,6 +292,9 @@ wss.on('connection', (ws) => {
   });
 
   ws.on('close', () => {
+    if (currentUser) {
+      userConnections.delete(currentUser.id);
+    }
     if (currentRoom && currentUser) {
       const room = rooms.get(currentRoom);
       if (room) {
@@ -264,10 +310,13 @@ wss.on('connection', (ws) => {
 });
 
 function broadcastToRoom(roomId, message) {
+  const room = rooms.get(roomId);
+  if (!room) return;
   const messageStr = JSON.stringify(message);
-  wss.clients.forEach(client => {
-    if (client.readyState === WebSocket.OPEN) {
-      // Check if client is in this room (simplified)
+  
+  room.members.forEach(member => {
+    const client = userConnections.get(member.id);
+    if (client && client.readyState === WebSocket.OPEN) {
       client.send(messageStr);
     }
   });
