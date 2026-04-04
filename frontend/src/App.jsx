@@ -1,8 +1,35 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { 
+  Users, Focus, Clock, Plus, LogOut, Send, ChevronLeft, Mic, MicOff, Video as VideoIcon, VideoOff, Trash2
+} from 'lucide-react';
+import Peer from 'simple-peer';
 import './App.css';
 
 const API_URL = 'http://localhost:5000';
 const WS_URL = 'ws://localhost:5000';
+
+// Helper component for rendering peer video streams
+const VideoElement = ({ peer, uniqueId, name }) => {
+  const ref = useRef();
+  useEffect(() => {
+    const handleStream = (stream) => { 
+      if(ref.current) {
+        ref.current.srcObject = stream;
+      }
+    };
+    peer.on('stream', handleStream);
+    return () => {
+      peer.off('stream', handleStream);
+    };
+  }, [peer]);
+
+  return (
+    <div className="video-cell">
+      <video playsInline autoPlay ref={ref} />
+      <span className="video-name">{name || "Participant"}</span>
+    </div>
+  );
+};
 
 function App() {
   const [authToken, setAuthToken] = useState(localStorage.getItem('authToken'));
@@ -10,25 +37,136 @@ function App() {
     const stored = localStorage.getItem('user');
     return stored ? JSON.parse(stored) : null;
   });
-  const [currentPage, setCurrentPage] = useState('rooms');
+  
   const [rooms, setRooms] = useState([]);
   const [selectedRoom, setSelectedRoom] = useState(null);
   const [messages, setMessages] = useState([]);
   const [newMessage, setNewMessage] = useState('');
   const [roomMembers, setRoomMembers] = useState([]);
+  
   const [pomodoroState, setPomodoroState] = useState({
-    isRunning: false,
-    timeLeft: 1500,
-    isBreak: false,
+    isRunning: false, timeLeft: 1500, isBreak: false,
   });
+  const [customTimeInput, setCustomTimeInput] = useState('25');
   const [focusMode, setFocusMode] = useState(false);
+  const [showCreateModal, setShowCreateModal] = useState(false);
+  const [newRoomName, setNewRoomName] = useState('');
+  const [isRoomReady, setIsRoomReady] = useState(false);
+  
   const ws = useRef(null);
+  const hasAuthedRef = useRef(false);
+  const pendingRoomJoinRef = useRef(null);
+  const userRef = useRef(user);
+  const localStreamRef = useRef(null);
+  const roomMembersRef = useRef([]);
+  
+  // WebRTC States
+  const [peers, setPeers] = useState([]);
+  const [localStream, setLocalStream] = useState(null);
+  const [micEnabled, setMicEnabled] = useState(false);
+  const [cameraEnabled, setCameraEnabled] = useState(false);
+  const peersRef = useRef([]);
+  const userVideoRef = useRef(null);
 
-  // WebSocket setup
+  useEffect(() => {
+    userRef.current = user;
+  }, [user]);
+
+  useEffect(() => {
+    localStreamRef.current = localStream;
+  }, [localStream]);
+
+  useEffect(() => {
+    roomMembersRef.current = roomMembers;
+  }, [roomMembers]);
+
+  // Initialize Media Stream when joining
+  const initWebRTC = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+      setLocalStream(stream);
+      setMicEnabled(true);
+      setCameraEnabled(true);
+      if (userVideoRef.current) {
+         userVideoRef.current.srcObject = stream;
+      }
+    } catch(err) {
+      console.error("Failed to get local stream", err);
+    }
+  };
+
+  const sendJoinRoom = (roomId) => {
+    if (!roomId) return;
+    pendingRoomJoinRef.current = roomId;
+
+    if (ws.current?.readyState === WebSocket.OPEN && hasAuthedRef.current) {
+      ws.current.send(JSON.stringify({ type: 'join_room', roomId }));
+      pendingRoomJoinRef.current = null;
+    }
+  };
+
+  // Toggle Media
+  const toggleMic = () => {
+    if (localStream) {
+       const track = localStream.getAudioTracks()[0];
+       if (track) {
+          track.enabled = !micEnabled;
+          setMicEnabled(!micEnabled);
+       }
+    }
+  };
+  const toggleCamera = () => {
+    if (localStream) {
+       const track = localStream.getVideoTracks()[0];
+       if (track) {
+          track.enabled = !cameraEnabled;
+          setCameraEnabled(!cameraEnabled);
+       }
+    }
+  };
+
+  function createPeer(userToSignal, callerID, stream) {
+    const peer = new Peer({
+      initiator: true,
+      trickle: false,
+      stream,
+    });
+    peer.on("signal", signal => {
+      if (ws.current?.readyState === WebSocket.OPEN) {
+        ws.current.send(JSON.stringify({
+           type: 'webrtc_signal',
+           targetId: userToSignal,
+           signal: signal
+        }));
+      }
+    });
+    return peer;
+  }
+
+  function addPeer(incomingSignal, callerID, stream) {
+    const peer = new Peer({
+      initiator: false,
+      trickle: false,
+      stream,
+    });
+    peer.on("signal", signal => {
+      if (ws.current?.readyState === WebSocket.OPEN) {
+        ws.current.send(JSON.stringify({
+          type: 'webrtc_signal',
+          targetId: callerID,
+          signal: signal
+        }));
+      }
+    });
+    peer.signal(incomingSignal);
+    return peer;
+  }
+
   useEffect(() => {
     if (!authToken) return;
 
     ws.current = new WebSocket(WS_URL);
+    hasAuthedRef.current = false;
 
     ws.current.onopen = () => {
       ws.current.send(JSON.stringify({ type: 'auth', token: authToken }));
@@ -38,6 +176,14 @@ function App() {
       const message = JSON.parse(event.data);
 
       switch (message.type) {
+        case 'auth_success':
+          hasAuthedRef.current = true;
+          setUser(message.user);
+          if (pendingRoomJoinRef.current) {
+            ws.current.send(JSON.stringify({ type: 'join_room', roomId: pendingRoomJoinRef.current }));
+            pendingRoomJoinRef.current = null;
+          }
+          break;
         case 'chat_message':
           setMessages(prev => [...prev, message.message]);
           break;
@@ -45,20 +191,33 @@ function App() {
           setRoomMembers(message.members);
           setMessages(prev => [...prev, {
             id: 'system-' + Date.now(),
-            username: 'System',
-            text: `${message.member.username} joined the room`,
-            timestamp: new Date().toISOString(),
-            isSystem: true,
+            username: 'System', text: `${message.member.username} joined the session.`, timestamp: new Date().toISOString(), isSystem: true,
           }]);
           break;
         case 'user_left':
           setRoomMembers(message.members);
+          // Remove disconnected peer
+          const peerObj = peersRef.current.find(p => p.peerID === message.userId);
+          if (peerObj) peerObj.peer.destroy();
+          const newPeers = peersRef.current.filter(p => p.peerID !== message.userId);
+          peersRef.current = newPeers;
+          setPeers(newPeers);
+          
+          setMessages(prev => [...prev, {
+            id: 'system-' + Date.now(),
+            username: 'System', text: `A user has left the session.`, timestamp: new Date().toISOString(), isSystem: true,
+          }]);
           break;
         case 'pomodoro_update':
           setPomodoroState(message.pomodoroState);
           break;
         case 'pomodoro_tick':
-          setPomodoroState(prev => ({ ...prev, timeLeft: message.timeLeft }));
+          setPomodoroState(prev => ({ 
+            ...prev, timeLeft: message.timeLeft, isRunning: message.isRunning !== undefined ? message.isRunning : prev.isRunning
+          }));
+          break;
+        case 'pomodoro_stop':
+          setPomodoroState(prev => ({ ...prev, isRunning: false }));
           break;
         case 'focus_mode_toggled':
           setFocusMode(message.focusMode);
@@ -67,415 +226,375 @@ function App() {
           setMessages(message.messages);
           setRoomMembers(message.members);
           setPomodoroState(message.pomodoroState);
+          setIsRoomReady(true);
+          
+          // Connect to existing members
+          const membersToCall = message.members.filter(m => m.id !== userRef.current?.id);
+          const initialPeers = [];
+          membersToCall.forEach(m => {
+            const peer = createPeer(m.id, userRef.current?.id, localStreamRef.current);
+            const peerObj = { peerID: m.id, peer, username: m.username };
+            peersRef.current.push(peerObj);
+            initialPeers.push(peerObj);
+          });
+          setPeers(initialPeers);
+          break;
+
+        case 'webrtc_signal':
+          // We received a signal from someone else
+          const item = peersRef.current.find(p => p.peerID === message.callerId);
+          if (item) {
+             // They sent an answer or ICE candidate
+             item.peer.signal(message.signal);
+          } else {
+             // We received an offer from a new caller
+             const newUsername = roomMembersRef.current.find(m => m.id === message.callerId)?.username || "Participant";
+             const peer = addPeer(message.signal, message.callerId, localStreamRef.current);
+             const peerObj = { peerID: message.callerId, peer, username: newUsername };
+             peersRef.current.push(peerObj);
+             setPeers([...peersRef.current]);
+          }
+          break;
+        case 'room_deleted':
+          handleLeaveRoom();
           break;
       }
+    };
+
+    ws.current.onclose = () => {
+      hasAuthedRef.current = false;
     };
 
     return () => ws.current?.close();
   }, [authToken]);
 
-  // Pomodoro timer effect
   useEffect(() => {
-    if (!pomodoroState.isRunning) return;
-
-    const interval = setInterval(() => {
-      if (ws.current?.readyState === WebSocket.OPEN) {
-        ws.current.send(JSON.stringify({ type: 'pomodoro_tick' }));
-      }
-    }, 1000);
-
-    return () => clearInterval(interval);
-  }, [pomodoroState.isRunning]);
-
-  // Fetch rooms
-  useEffect(() => {
+    if (!authToken) return;
     const fetchRooms = async () => {
-      const response = await fetch(`${API_URL}/api/rooms`);
-      const data = await response.json();
-      setRooms(data);
+      try {
+        const response = await fetch(`${API_URL}/api/rooms`);
+        if (response.ok) setRooms(await response.json());
+      } catch (err) {}
     };
-
     fetchRooms();
-    const interval = setInterval(fetchRooms, 5000);
-    return () => clearInterval(interval);
-  }, []);
+    let interval;
+    if (!selectedRoom) interval = setInterval(fetchRooms, 3000);
+    return () => { if (interval) clearInterval(interval); };
+  }, [authToken, selectedRoom]);
 
-  const handleAuth = async (email, password, isLogin) => {
+  const handleAuth = async (email, password, username, isLogin) => {
     const endpoint = isLogin ? '/api/auth/login' : '/api/auth/register';
+    const body = isLogin ? { email, password } : { email, password, username };
     const response = await fetch(`${API_URL}${endpoint}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        email,
-        password,
-        username: email.split('@')[0],
-      }),
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
     });
-
     const data = await response.json();
     if (data.token) {
       setAuthToken(data.token);
       setUser(data.user);
       localStorage.setItem('authToken', data.token);
       localStorage.setItem('user', JSON.stringify(data.user));
-      setCurrentPage('rooms');
-    }
+    } else throw new Error(data.error || 'Authentication failed');
   };
 
-  const handleCreateRoom = async (name) => {
-    const response = await fetch(`${API_URL}/api/rooms`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name, maxMembers: 10 }),
-    });
+  const handleLogout = () => {
+    setAuthToken(null);
+    setUser(null);
+    setSelectedRoom(null);
+    localStorage.removeItem('authToken');
+    localStorage.removeItem('user');
+  };
 
+  const handleCreateRoom = async (e) => {
+    e.preventDefault();
+    if (!newRoomName.trim()) return;
+    const response = await fetch(`${API_URL}/api/rooms`, {
+       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: newRoomName, maxMembers: 20, userId: user.id }),
+    });
     const { roomId } = await response.json();
+    setNewRoomName('');
+    setShowCreateModal(false);
     handleJoinRoom(roomId);
   };
 
   const handleJoinRoom = (roomId) => {
+    if (selectedRoom === roomId) return;
     setSelectedRoom(roomId);
+    setIsRoomReady(false);
     setMessages([]);
     setRoomMembers([]);
-    setCurrentPage('study');
     setPomodoroState({ isRunning: false, timeLeft: 1500, isBreak: false });
     setFocusMode(false);
 
-    if (ws.current?.readyState === WebSocket.OPEN) {
-      ws.current.send(JSON.stringify({ type: 'join_room', roomId }));
+    sendJoinRoom(roomId);
+
+    // Media is optional and should not block room join/chat/timer.
+    initWebRTC();
+  };
+
+  const handleLeaveRoom = () => {
+    setSelectedRoom(null);
+    setIsRoomReady(false);
+    
+    // Stop local media tracks to free camera
+    if (localStream) {
+      localStream.getTracks().forEach(track => track.stop());
+    }
+    setLocalStream(null);
+    peersRef.current.forEach(p => p.peer.destroy());
+    setPeers([]);
+    peersRef.current = [];
+
+    ws.current?.close(); 
+    window.location.reload(); 
+  };
+
+  const handleDeleteRoom = async () => {
+    if (!selectedRoom) return;
+    try {
+      await fetch(`${API_URL}/api/rooms/${selectedRoom}`, {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId: user.id })
+      });
+    } catch(err) {
+      console.error('Failed to delete room:', err);
     }
   };
 
-  const handleSendMessage = () => {
-    if (!newMessage.trim() || !ws.current) return;
-
-    ws.current.send(JSON.stringify({
-      type: 'chat_message',
-      text: newMessage,
-    }));
-
-    setNewMessage('');
+  const handleSendMessage = (e) => {
+    e.preventDefault();
+    if (!newMessage.trim() || focusMode || !isRoomReady) return;
+    if (ws.current?.readyState === WebSocket.OPEN) {
+      ws.current.send(JSON.stringify({ type: 'chat_message', text: newMessage }));
+      setNewMessage('');
+    }
   };
 
-  const handlePomodoroStart = (isBreak = false) => {
-    const duration = isBreak ? 300 : 1500; // 5 min break, 25 min work
+  const handlePomodoroStart = () => {
+    if (!isRoomReady) return;
+    const isBreak = customTimeInput === '5';
+    const minutes = Number.parseInt(customTimeInput, 10);
+    const duration = Number.isFinite(minutes) ? Math.max(1, minutes) * 60 : 1500;
     if (ws.current?.readyState === WebSocket.OPEN) {
-      ws.current.send(JSON.stringify({
-        type: 'pomodoro_start',
-        duration,
-        isBreak,
-      }));
+      ws.current.send(JSON.stringify({ type: 'pomodoro_start', duration, isBreak }));
     }
   };
 
   const handlePomodoroStop = () => {
-    if (ws.current?.readyState === WebSocket.OPEN) {
-      ws.current.send(JSON.stringify({ type: 'pomodoro_stop' }));
-    }
+    if (ws.current?.readyState === WebSocket.OPEN) ws.current.send(JSON.stringify({ type: 'pomodoro_stop' }));
   };
 
   const handleToggleFocusMode = () => {
-    if (ws.current?.readyState === WebSocket.OPEN) {
-      ws.current.send(JSON.stringify({ type: 'toggle_focus_mode' }));
-    }
+    if (ws.current?.readyState === WebSocket.OPEN) ws.current.send(JSON.stringify({ type: 'toggle_focus_mode' }));
   };
 
   const formatTime = (seconds) => {
-    const mins = Math.floor(seconds / 60);
-    const secs = seconds % 60;
+    const mins = Math.floor(seconds / 60); const secs = seconds % 60;
     return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+  };
+
+  const getInitials = (name) => {
+    if (!name) return '?';
+    return name.substring(0, 2).toUpperCase();
   };
 
   if (!authToken) {
     return <AuthPage onAuth={handleAuth} />;
   }
 
-  if (currentPage === 'rooms') {
-    return <RoomsPage rooms={rooms} onJoinRoom={handleJoinRoom} onCreateRoom={handleCreateRoom} user={user} onLogout={() => {
-      setAuthToken(null);
-      setUser(null);
-      localStorage.removeItem('authToken');
-      localStorage.removeItem('user');
-    }} />;
+  if (!selectedRoom) {
+    return (
+      <div className="luxe-app">
+        <header className="luxe-header">
+          <div className="luxe-brand">Focus.</div>
+          <div className="luxe-user-menu">
+            <span className="luxe-welcome">Hello, {user?.username}</span>
+            <button onClick={handleLogout} className="luxe-btn-logout"><LogOut size={16} /> Logout</button>
+          </div>
+        </header>
+        <main className="luxe-main">
+          <div className="luxe-main-top">
+            <h1 className="luxe-title">Your Study Spaces</h1>
+            <button className="luxe-btn-primary" onClick={() => setShowCreateModal(true)}>
+              <Plus size={18} style={{marginRight: '6px'}}/> New Space
+            </button>
+          </div>
+          <div className="luxe-grid">
+            {rooms.map(room => (
+              <div key={room.id} className="luxe-card space-card" onClick={() => handleJoinRoom(room.id)}>
+                <div className="space-icon">{getInitials(room.name)}</div>
+                <div className="space-info">
+                  <h3>{room.name}</h3>
+                  <p>{room.members} / {room.maxMembers} participants</p>
+                </div>
+              </div>
+            ))}
+            {rooms.length === 0 && <div className="luxe-empty">No active spaces found. Create one.</div>}
+          </div>
+        </main>
+        {showCreateModal && (
+          <div className="luxe-modal-overlay">
+            <div className="luxe-modal">
+              <h2>Create a Space</h2>
+              <form onSubmit={handleCreateRoom}>
+                <div className="luxe-input-grp">
+                  <label>Space Name</label>
+                  <input type="text" value={newRoomName} onChange={e => setNewRoomName(e.target.value)} required autoFocus/>
+                </div>
+                <div className="luxe-modal-actions">
+                  <button type="button" className="luxe-btn-text cancel-btn" onClick={() => setShowCreateModal(false)}>Cancel</button>
+                  <button type="submit" className="luxe-btn-primary">Create</button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
+      </div>
+    );
   }
 
+  const activeRoomData = rooms.find(r => r.id === selectedRoom) || { name: 'Study Room' };
+
   return (
-    <StudyRoomPage
-      room={selectedRoom}
-      messages={messages}
-      newMessage={newMessage}
-      onMessageChange={setNewMessage}
-      onSendMessage={handleSendMessage}
-      members={roomMembers}
-      pomodoroState={pomodoroState}
-      focusMode={focusMode}
-      onPomodoroStart={handlePomodoroStart}
-      onPomodoroStop={handlePomodoroStop}
-      onToggleFocusMode={handleToggleFocusMode}
-      formatTime={formatTime}
-      onLeaveRoom={() => {
-        setCurrentPage('rooms');
-        setSelectedRoom(null);
-        setMessages([]);
-      }}
-    />
+    <div className="luxe-app">
+      <header className="luxe-header room-header">
+        <button onClick={handleLeaveRoom} className="luxe-btn-text">
+          <ChevronLeft size={20} /> Back
+        </button>
+        <h2 className="room-title">{activeRoomData.name}</h2>
+        <div className="header-actions">
+          {activeRoomData.createdBy === user.id && (
+            <button className="luxe-btn-danger small" onClick={handleDeleteRoom} title="Delete Room">
+              <Trash2 size={16} /> <span>Delete Room</span>
+            </button>
+          )}
+          <button className={`luxe-focus-btn ${focusMode ? 'active' : ''}`} onClick={handleToggleFocusMode}>
+            <Focus size={16} /> <span>Focus Mode</span>
+          </button>
+        </div>
+      </header>
+
+      <main className="luxe-study-layout">
+        <div className="luxe-study-side">
+          {/* New Video Area */}
+          <div className="luxe-card video-card">
+            <h3 className="card-lbl">Current Session</h3>
+            <div className="video-grid">
+               <div className="video-cell local-video">
+                  <video muted ref={userVideoRef} autoPlay playsInline />
+                  <span className="video-name">You ({user?.username})</span>
+               </div>
+               
+               {peers.map((peerObj, index) => (
+                  <VideoElement key={peerObj.peerID} peer={peerObj.peer} uniqueId={peerObj.peerID} name={peerObj.username} />
+               ))}
+            </div>
+
+            <div className="media-controls">
+              <button className={`media-btn ${!micEnabled ? 'danger' : ''}`} onClick={toggleMic}>
+                {micEnabled ? <Mic size={20} /> : <MicOff size={20} />}
+              </button>
+              <button className={`media-btn ${!cameraEnabled ? 'danger' : ''}`} onClick={toggleCamera}>
+                {cameraEnabled ? <VideoIcon size={20} /> : <VideoOff size={20} />}
+              </button>
+              <button className="media-btn danger disconnect-btn" onClick={handleLeaveRoom} title="Leave Session">
+                <LogOut size={18} />
+              </button>
+            </div>
+          </div>
+          
+          <div className="luxe-card timer-card">
+            <h3 className="card-lbl">Pomodoro Timer</h3>
+            <div className={`timer-huge ${pomodoroState.isRunning ? 'running' : ''}`}>
+              {formatTime(pomodoroState.timeLeft)}
+            </div>
+            <div className="timer-controls">
+              {!pomodoroState.isRunning ? (
+                <div className="timer-setup">
+                  <div className="timer-presets">
+                    <button className={customTimeInput === '25' ? 'active' : ''} onClick={() => setCustomTimeInput('25')}>25m</button>
+                    <button className={customTimeInput === '50' ? 'active' : ''} onClick={() => setCustomTimeInput('50')}>50m</button>
+                    <button className={customTimeInput === '5' ? 'active' : ''} onClick={() => setCustomTimeInput('5')}>Break</button>
+                  </div>
+                  <div className="custom-timer">
+                    <input type="number" placeholder="Custom" value={customTimeInput} onChange={e => setCustomTimeInput(e.target.value)} min="1" max="120" />
+                    <span>minutes</span>
+                  </div>
+                  <button className="luxe-btn-primary full start-timer-btn" onClick={handlePomodoroStart} disabled={!isRoomReady}>
+                     {isRoomReady ? 'Start Timer' : 'Joining Room...'}
+                  </button>
+                </div>
+              ) : (
+                <button className="luxe-btn-danger" onClick={handlePomodoroStop}>Stop Timer</button>
+              )}
+            </div>
+          </div>
+        </div>
+
+        <div className="luxe-study-main">
+          <div className={`luxe-chat-container ${focusMode ? 'focused' : ''}`}>
+            {focusMode && (
+              <div className="luxe-focus-overlay">
+                <Focus size={32} />
+                <h3>Focus mode is active</h3>
+                <p>Chat is temporarily hidden.</p>
+              </div>
+            )}
+            <div className="luxe-messages">
+              {messages.map((msg, i) => (
+                msg.isSystem ? (
+                  <div key={i} className="luxe-sys-msg">{msg.text}</div>
+                ) : (
+                  <div key={i} className={`luxe-msg ${msg.username === user?.username ? 'own' : ''}`}>
+                    {msg.username !== user?.username && <div className="msg-avatar">{getInitials(msg.username)}</div>}
+                    <div className="msg-bubble-wrapper">
+                      {msg.username !== user?.username && <span className="msg-author">{msg.username}</span>}
+                      <div className="msg-bubble">{msg.text}</div>
+                    </div>
+                  </div>
+                )
+              ))}
+            </div>
+            <form className="luxe-chat-input" onSubmit={handleSendMessage}>
+              <input type="text" placeholder={isRoomReady ? 'Type a message...' : 'Joining room...'} value={newMessage} onChange={e => setNewMessage(e.target.value)} disabled={focusMode || !isRoomReady} />
+              <button type="submit" disabled={focusMode || !newMessage.trim() || !isRoomReady}><Send size={18} /></button>
+            </form>
+          </div>
+        </div>
+      </main>
+    </div>
   );
 }
 
 function AuthPage({ onAuth }) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [username, setUsername] = useState('');
   const [isLogin, setIsLogin] = useState(true);
   const [error, setError] = useState('');
 
   const handleSubmit = async (e) => {
-    e.preventDefault();
-    setError('');
-    try {
-      await onAuth(email, password, isLogin);
-    } catch (err) {
-      setError(err.message);
-    }
+    e.preventDefault(); setError('');
+    try { await onAuth(email, password, username, isLogin); } 
+    catch (err) { setError(err.message); }
   };
 
   return (
-    <div className="auth-container">
-      <div className="auth-card">
-        <div className="auth-header">
-          <h1>📚 Study Room</h1>
-          <p>Virtual Library for Collaborative Learning</p>
-        </div>
-
-        <form onSubmit={handleSubmit}>
-          <input
-            type="email"
-            placeholder="Email"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            required
-          />
-          <input
-            type="password"
-            placeholder="Password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            required
-          />
-
-          {error && <div className="error-message">{error}</div>}
-
-          <button type="submit" className="auth-button">
-            {isLogin ? 'Login' : 'Sign Up'}
-          </button>
+    <div className="luxe-auth-wrap">
+      <div className="luxe-auth-card">
+        <h1 className="auth-brand">Focus.</h1>
+        <p className="auth-sub">{isLogin ? 'Sign in to continue.' : 'Create a space for deep work.'}</p>
+        <form onSubmit={handleSubmit} className="auth-form">
+          {!isLogin && (<div className="luxe-input"><input type="text" placeholder="Username" value={username} onChange={e => setUsername(e.target.value)} required /></div>)}
+          <div className="luxe-input"><input type="email" placeholder="Email" value={email} onChange={e => setEmail(e.target.value)} required /></div>
+          <div className="luxe-input"><input type="password" placeholder="Password" value={password} onChange={e => setPassword(e.target.value)} required /></div>
+          {error && <p className="luxe-err">{error}</p>}
+          <button type="submit" className="luxe-btn-primary full">{isLogin ? 'Sign In' : 'Sign Up'}</button>
         </form>
-
-        <button
-          type="button"
-          className="toggle-auth"
-          onClick={() => setIsLogin(!isLogin)}
-        >
-          {isLogin ? "Don't have an account? Sign up" : 'Already have an account? Login'}
+        <button className="luxe-text-mode" onClick={() => setIsLogin(!isLogin)}>
+          {isLogin ? "Create an account" : "Already have an account?"}
         </button>
-      </div>
-    </div>
-  );
-}
-
-function RoomsPage({ rooms, onJoinRoom, onCreateRoom, user, onLogout }) {
-  const [showCreateModal, setShowCreateModal] = useState(false);
-  const [roomName, setRoomName] = useState('');
-
-  const handleCreate = (e) => {
-    e.preventDefault();
-    if (roomName.trim()) {
-      onCreateRoom(roomName);
-      setRoomName('');
-      setShowCreateModal(false);
-    }
-  };
-
-  return (
-    <div className="rooms-container">
-      <div className="rooms-header">
-        <div className="header-content">
-          <h1>📚 Virtual Library</h1>
-          <p>Study Rooms Available</p>
-        </div>
-        <button className="logout-btn" onClick={onLogout}>Logout</button>
-      </div>
-
-      <div className="rooms-grid">
-        {rooms.map(room => (
-          <div key={room.id} className="room-card">
-            <div className="room-info">
-              <h3>{room.name}</h3>
-              <p className="room-meta">👥 {room.members}/{room.maxMembers}</p>
-              {room.focusMode && <span className="focus-badge">🎯 Focus Mode</span>}
-            </div>
-            <button
-              className="join-btn"
-              onClick={() => onJoinRoom(room.id)}
-              disabled={room.members >= room.maxMembers}
-            >
-              Join Room
-            </button>
-          </div>
-        ))}
-
-        <div className="room-card create-card" onClick={() => setShowCreateModal(true)}>
-          <div className="create-content">
-            <p>➕ Create New Room</p>
-          </div>
-        </div>
-      </div>
-
-      {showCreateModal && (
-        <div className="modal-overlay">
-          <div className="modal-content">
-            <h2>Create a Study Room</h2>
-            <form onSubmit={handleCreate}>
-              <input
-                type="text"
-                placeholder="Room name (e.g., Physics Study Group)"
-                value={roomName}
-                onChange={(e) => setRoomName(e.target.value)}
-                required
-              />
-              <button type="submit">Create Room</button>
-            </form>
-            <button className="close-modal" onClick={() => setShowCreateModal(false)}>
-              ✕
-            </button>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-function StudyRoomPage({
-  room,
-  messages,
-  newMessage,
-  onMessageChange,
-  onSendMessage,
-  members,
-  pomodoroState,
-  focusMode,
-  onPomodoroStart,
-  onPomodoroStop,
-  onToggleFocusMode,
-  formatTime,
-  onLeaveRoom,
-}) {
-  const messagesEndRef = useRef(null);
-
-  useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages]);
-
-  return (
-    <div className={`study-room-container ${focusMode ? 'focus-mode' : ''}`}>
-      <div className="study-header">
-        <div className="header-left">
-          <button className="back-btn" onClick={onLeaveRoom}>← Back</button>
-          <h2>Study Room</h2>
-        </div>
-        <div className="header-right">
-          <button
-            className={`focus-mode-btn ${focusMode ? 'active' : ''}`}
-            onClick={onToggleFocusMode}
-          >
-            🎯 {focusMode ? 'Focus ON' : 'Focus OFF'}
-          </button>
-        </div>
-      </div>
-
-      <div className="study-content">
-        {/* Pomodoro Section */}
-        <div className="pomodoro-section">
-          <div className="pomodoro-card">
-            <h3>⏱️ Pomodoro Timer</h3>
-            <div className={`timer-display ${pomodoroState.isRunning ? 'running' : ''}`}>
-              {formatTime(pomodoroState.timeLeft)}
-            </div>
-            <p className="timer-label">
-              {pomodoroState.isBreak ? '☕ Break Time' : '📖 Study Time'}
-            </p>
-            <div className="timer-controls">
-              {!pomodoroState.isRunning ? (
-                <>
-                  <button
-                    className="timer-btn start"
-                    onClick={() => onPomodoroStart(false)}
-                  >
-                    Start Study (25min)
-                  </button>
-                  <button
-                    className="timer-btn break"
-                    onClick={() => onPomodoroStart(true)}
-                  >
-                    Start Break (5min)
-                  </button>
-                </>
-              ) : (
-                <button className="timer-btn stop" onClick={onPomodoroStop}>
-                  Stop Timer
-                </button>
-              )}
-            </div>
-          </div>
-
-          {/* Members Section */}
-          <div className="members-card">
-            <h3>👥 Room Members</h3>
-            <div className="members-list">
-              {members.map(member => (
-                <div key={member.id} className="member-item">
-                  <span className={`status-dot ${member.status}`}></span>
-                  <span>{member.username.split('@')[0]}</span>
-                </div>
-              ))}
-            </div>
-            <p className="member-count">{members.length} studying</p>
-          </div>
-        </div>
-
-        {/* Chat Section */}
-        <div className="chat-section">
-          <div className="chat-header">
-            <h3>💬 Chat</h3>
-            {focusMode && <span className="focus-indicator">🔕 Focus Mode - Chat Disabled</span>}
-          </div>
-
-          <div className="messages-container">
-            {messages.map(msg => (
-              <div key={msg.id} className={`message ${msg.isSystem ? 'system' : ''}`}>
-                <div className="message-header">
-                  <span className="username">{msg.username}</span>
-                  <span className="timestamp">
-                    {new Date(msg.timestamp).toLocaleTimeString()}
-                  </span>
-                </div>
-                <p className="message-text">{msg.text}</p>
-              </div>
-            ))}
-            <div ref={messagesEndRef} />
-          </div>
-
-          {!focusMode && (
-            <div className="message-input-container">
-              <input
-                type="text"
-                placeholder="Type a message..."
-                value={newMessage}
-                onChange={(e) => onMessageChange(e.target.value)}
-                onKeyPress={(e) => e.key === 'Enter' && onSendMessage()}
-              />
-              <button onClick={onSendMessage}>Send</button>
-            </div>
-          )}
-        </div>
       </div>
     </div>
   );
