@@ -6,11 +6,14 @@
   --bdr-color: #d2d2d7;
   --brand-color: #0071e3;
   --brand-hover: #0077ed;
-  --sys-blue: #0A84FF;
+  --sys-blue: #0a84ff;
   --sys-red: #ff3b30;
   --btn-danger: #ffefe5;
   --btn-danger-hover: #ffd9c2;
-  --font-fam: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol";
+  --font-fam:
+    -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto,
+    Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji",
+    "Segoe UI Symbol";
 }
 
 * {
@@ -45,7 +48,7 @@ body {
   background: var(--bg-card);
   padding: 48px;
   border-radius: 24px;
-  box-shadow: 0 4px 24px rgba(0,0,0,0.04);
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.04);
   width: 100%;
   max-width: 400px;
   text-align: center;
@@ -69,7 +72,7 @@ body {
   gap: 16px;
 }
 
-.luxe-input input, 
+.luxe-input input,
 .timer-controls input,
 .luxe-input-grp input {
   width: 100%;
@@ -82,7 +85,7 @@ body {
   background: var(--bg-card);
 }
 
-.luxe-input input:focus, 
+.luxe-input input:focus,
 .luxe-input-grp input:focus {
   border-color: var(--brand-color);
 }
@@ -95,7 +98,7 @@ body {
   padding: 16px 32px;
   background: rgba(255, 255, 255, 0.8);
   backdrop-filter: blur(20px);
-  border-bottom: 1px solid rgba(0,0,0,0.05);
+  border-bottom: 1px solid rgba(0, 0, 0, 0.05);
   position: sticky;
   top: 0;
   z-index: 100;
@@ -166,6 +169,42 @@ body {
   gap: 24px;
 }
 
+.join-code-card {
+  margin-bottom: 24px;
+}
+
+.join-code-card h3 {
+  font-size: 16px;
+  margin-bottom: 12px;
+}
+
+.join-code-form {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+.join-code-form input {
+  flex: 1;
+  padding: 12px 14px;
+  border: 1px solid var(--bdr-color);
+  border-radius: 12px;
+  font-size: 14px;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+}
+
+.join-code-form input:focus {
+  outline: none;
+  border-color: var(--brand-color);
+}
+
+.join-code-error {
+  margin-top: 8px;
+  color: var(--sys-red);
+  font-size: 12px;
+}
+
 .space-card {
   padding: 24px;
   border-radius: 20px;
@@ -173,16 +212,18 @@ body {
   display: flex;
   align-items: center;
   gap: 16px;
-  transition: transform 0.2s, box-shadow 0.2s;
+  transition:
+    transform 0.2s,
+    box-shadow 0.2s;
   background: var(--bg-card);
-  box-shadow: 0 2px 12px rgba(0,0,0,0.03);
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.03);
   border: 1px solid transparent;
 }
 
 .space-card:hover {
   transform: translateY(-2px);
-  box-shadow: 0 8px 24px rgba(0,0,0,0.08);
-  border-color: rgba(0,0,0,0.02);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.08);
+  border-color: rgba(0, 0, 0, 0.02);
 }
 
 .space-icon {
@@ -208,11 +249,26 @@ body {
   color: var(--text-sec);
 }
 
+.space-code {
+  display: inline-block;
+  margin-top: 8px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  background: #eef5ff;
+  color: var(--brand-color);
+  letter-spacing: 0.5px;
+}
+
 /* Modals */
 .luxe-modal-overlay {
   position: fixed;
-  top: 0; left: 0; right: 0; bottom: 0;
-  background: rgba(0,0,0,0.4);
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.4);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -226,7 +282,7 @@ body {
   border-radius: 24px;
   width: 100%;
   max-width: 400px;
-  box-shadow: 0 16px 48px rgba(0,0,0,0.1);
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.1);
 }
 
 .luxe-modal h2 {
@@ -293,7 +349,7 @@ body {
 }
 
 .luxe-btn-text:hover {
-  background: rgba(0,0,0,0.05);
+  background: rgba(0, 0, 0, 0.05);
   color: var(--text-main);
 }
 
@@ -330,7 +386,7 @@ body {
   flex: 1;
   background: var(--bg-card);
   border-radius: 24px;
-  box-shadow: 0 4px 24px rgba(0,0,0,0.03);
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.03);
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -341,7 +397,7 @@ body {
   background: var(--bg-card);
   border-radius: 24px;
   padding: 24px;
-  box-shadow: 0 4px 24px rgba(0,0,0,0.03);
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.03);
 }
 
 .card-lbl {
@@ -451,6 +507,41 @@ body {
   align-items: center;
 }
 
+.invite-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--bdr-color);
+  background: #fff;
+  font-size: 12px;
+  color: var(--text-sec);
+}
+
+.invite-copy-btn {
+  border: none;
+  width: 24px;
+  height: 24px;
+  border-radius: 12px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: #f0f0f5;
+  color: var(--text-main);
+  cursor: pointer;
+}
+
+.invite-copy-btn:hover {
+  background: #e5e5ea;
+}
+
+.invite-copy-feedback {
+  font-size: 11px;
+  color: var(--brand-color);
+  font-weight: 600;
+}
+
 .luxe-btn-danger {
   width: 100%;
   padding: 12px;
@@ -514,10 +605,18 @@ body {
 }
 
 .msg-author {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   font-size: 11px;
   color: var(--text-sec);
   margin-bottom: 4px;
   margin-left: 4px;
+}
+
+.msg-time {
+  font-size: 10px;
+  opacity: 0.8;
 }
 
 .msg-bubble {
@@ -590,7 +689,10 @@ body {
 /* Focus Overlay */
 .luxe-focus-overlay {
   position: absolute;
-  top: 0; left: 0; right: 0; bottom: 0;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
   background: rgba(255, 255, 255, 0.95);
   backdrop-filter: blur(10px);
   z-index: 10;
@@ -609,9 +711,18 @@ body {
 }
 
 @keyframes pulse {
-  0% { transform: scale(1); opacity: 1; }
-  50% { transform: scale(1.1); opacity: 0.8; }
-  100% { transform: scale(1); opacity: 1; }
+  0% {
+    transform: scale(1);
+    opacity: 1;
+  }
+  50% {
+    transform: scale(1.1);
+    opacity: 0.8;
+  }
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
 }
 
 .luxe-focus-btn {
@@ -634,7 +745,6 @@ body {
   color: white;
   border-color: var(--text-main);
 }
-
 
 /* --- WebRTC Video Grid Styles --- */
 .video-card {
@@ -673,7 +783,7 @@ body {
   position: absolute;
   bottom: 8px;
   left: 8px;
-  background: rgba(0,0,0,0.5);
+  background: rgba(0, 0, 0, 0.5);
   backdrop-filter: blur(4px);
   color: white;
   padding: 4px 8px;
