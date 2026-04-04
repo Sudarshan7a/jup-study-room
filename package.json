@@ -1,0 +1,17 @@
+{
+  "name": "codes",
+  "version": "1.0.0",
+  "description": "A collaborative virtual study space where students can join study rooms, use Pomodoro timers, chat with peers, and enter focus mode for distraction-free studying.",
+  "main": "index.js",
+  "scripts": {
+    "install:all": "npm install --prefix backend && npm install --prefix frontend",
+    "dev": "concurrently \"npm start --prefix backend\" \"npm run dev --prefix frontend\"",
+    "start": "npm run dev"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "devDependencies": {
+    "concurrently": "^9.2.1"
+  }
+}
