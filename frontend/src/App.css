@@ -646,6 +646,16 @@ body {
   align-items: center;
 }
 
+.join-room-status {
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--text-sec);
+}
+
+.join-room-status.error {
+  color: var(--sys-red);
+}
+
 .luxe-chat-input input {
   flex: 1;
   background: transparent;
