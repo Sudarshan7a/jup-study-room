@@ -348,6 +348,16 @@ wss.on("connection", (ws) => {
           break;
 
         case "join_room":
+          if (!currentUser) {
+            ws.send(
+              JSON.stringify({
+                type: "error",
+                error: "Please authenticate before joining a room",
+              }),
+            );
+            return;
+          }
+
           const room = rooms.get(message.roomId);
           if (!room) {
             ws.send(JSON.stringify({ type: "error", error: "Room not found" }));
@@ -357,6 +367,20 @@ wss.on("connection", (ws) => {
           if (room.members.length >= room.maxMembers) {
             ws.send(JSON.stringify({ type: "error", error: "Room is full" }));
             return;
+          }
+
+          if (currentRoom && currentRoom !== message.roomId) {
+            const previousRoom = rooms.get(currentRoom);
+            if (previousRoom) {
+              previousRoom.members = previousRoom.members.filter(
+                (m) => m.id !== currentUser.id,
+              );
+              broadcastToRoom(currentRoom, {
+                type: "user_left",
+                userId: currentUser.id,
+                members: previousRoom.members,
+              });
+            }
           }
 
           currentRoom = message.roomId;
@@ -371,14 +395,7 @@ wss.on("connection", (ws) => {
             room.members.push(member);
           }
 
-          // Notify all users in room
-          broadcastToRoom(currentRoom, {
-            type: "user_joined",
-            member,
-            members: room.members,
-          });
-
-          // Send room history to new user
+          // Send room history to new user first so join UI can render immediately.
           ws.send(
             JSON.stringify({
               type: "room_state",
@@ -386,6 +403,17 @@ wss.on("connection", (ws) => {
               members: room.members,
               pomodoroState: room.pomodoroState,
             }),
+          );
+
+          // Notify the rest of the room after the joining user is ready.
+          broadcastToRoom(
+            currentRoom,
+            {
+              type: "user_joined",
+              member,
+              members: room.members,
+            },
+            { excludeUserId: currentUser.id },
           );
 
           break;
@@ -525,16 +553,30 @@ wss.on("connection", (ws) => {
   });
 });
 
-function broadcastToRoom(roomId, message) {
+function broadcastToRoom(roomId, message, options = {}) {
   const room = rooms.get(roomId);
   if (!room) return;
   const messageStr = JSON.stringify(message);
+  const excludeUserId = options.excludeUserId;
 
-  room.members.forEach((member) => {
+  room.members = room.members.filter((member) => {
+    if (excludeUserId && member.id === excludeUserId) {
+      return true;
+    }
+
     const client = userConnections.get(member.id);
     if (client && client.readyState === WebSocket.OPEN) {
-      client.send(messageStr);
+      try {
+        client.send(messageStr);
+        return true;
+      } catch (error) {
+        console.warn(`Failed to send message to user ${member.id}:`, error);
+        userConnections.delete(member.id);
+        return false;
+      }
     }
+
+    return false;
   });
 }
 
