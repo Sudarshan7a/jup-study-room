@@ -1,1 +1,14 @@
-[]
+[
+  {
+    "id": "1776621944648",
+    "username": "qwe",
+    "email": "1@in.com",
+    "password": "$2a$10$6oLPKHu5qZYq.4cBM1xjvOje5Te1szl1fis/m2D8aJhFcSQQWietW"
+  },
+  {
+    "id": "1776621975951",
+    "username": "abc",
+    "email": "2@g.j",
+    "password": "$2a$10$Z8ft6Xo1oLPDzC7kaDplhO/APk.j.zQThgKiQKVCYHglFkFsvnF0e"
+  }
+]
