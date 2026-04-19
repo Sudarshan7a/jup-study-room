@@ -72,11 +72,16 @@ function App() {
   const [isRoomReady, setIsRoomReady] = useState(false);
   const [joinCodeInput, setJoinCodeInput] = useState("");
   const [joinCodeError, setJoinCodeError] = useState("");
+  const [roomJoinError, setRoomJoinError] = useState("");
   const [inviteCopyFeedback, setInviteCopyFeedback] = useState("");
 
   const ws = useRef(null);
   const hasAuthedRef = useRef(false);
   const pendingRoomJoinRef = useRef(null);
+  const selectedRoomRef = useRef(null);
+  const isRoomReadyRef = useRef(false);
+  const joinRetryIntervalRef = useRef(null);
+  const joinRetryDeadlineRef = useRef(0);
   const userRef = useRef(user);
   const localStreamRef = useRef(null);
   const roomMembersRef = useRef([]);
@@ -100,6 +105,22 @@ function App() {
   useEffect(() => {
     roomMembersRef.current = roomMembers;
   }, [roomMembers]);
+
+  useEffect(() => {
+    selectedRoomRef.current = selectedRoom;
+  }, [selectedRoom]);
+
+  useEffect(() => {
+    isRoomReadyRef.current = isRoomReady;
+  }, [isRoomReady]);
+
+  const clearJoinRetry = () => {
+    if (joinRetryIntervalRef.current) {
+      clearInterval(joinRetryIntervalRef.current);
+      joinRetryIntervalRef.current = null;
+    }
+    joinRetryDeadlineRef.current = 0;
+  };
 
   const ensureLocalStream = async () => {
     if (localStreamRef.current) {
@@ -149,13 +170,36 @@ function App() {
   };
 
   const sendJoinRoom = (roomId) => {
-    if (!roomId) return;
+    if (!roomId) return false;
     pendingRoomJoinRef.current = roomId;
 
     if (ws.current?.readyState === WebSocket.OPEN && hasAuthedRef.current) {
       ws.current.send(JSON.stringify({ type: "join_room", roomId }));
       pendingRoomJoinRef.current = null;
+      return true;
     }
+
+    return false;
+  };
+
+  const scheduleJoinRetry = (roomId) => {
+    clearJoinRetry();
+    joinRetryDeadlineRef.current = Date.now() + 8000;
+
+    joinRetryIntervalRef.current = setInterval(() => {
+      if (isRoomReadyRef.current || selectedRoomRef.current !== roomId) {
+        clearJoinRetry();
+        return;
+      }
+
+      if (Date.now() >= joinRetryDeadlineRef.current) {
+        clearJoinRetry();
+        setRoomJoinError("Join is taking too long. Please retry.");
+        return;
+      }
+
+      sendJoinRoom(roomId);
+    }, 500);
   };
 
   // Toggle Media
@@ -239,6 +283,7 @@ function App() {
       switch (message.type) {
         case "auth_success":
           hasAuthedRef.current = true;
+          setRoomJoinError("");
           setUser(message.user);
           if (pendingRoomJoinRef.current) {
             ws.current.send(
@@ -249,6 +294,15 @@ function App() {
             );
             pendingRoomJoinRef.current = null;
           }
+          break;
+        case "auth_error":
+          clearJoinRetry();
+          setAuthToken(null);
+          setUser(null);
+          setSelectedRoom(null);
+          setRoomJoinError("Session expired. Please sign in again.");
+          localStorage.removeItem("authToken");
+          localStorage.removeItem("user");
           break;
         case "chat_message":
           setMessages((prev) => [...prev, message.message]);
@@ -310,6 +364,8 @@ function App() {
           setFocusMode(message.focusMode);
           break;
         case "room_state":
+          clearJoinRetry();
+          setRoomJoinError("");
           setMessages(message.messages);
           setRoomMembers(message.members);
           setPomodoroState(message.pomodoroState);
@@ -360,6 +416,14 @@ function App() {
             setPeers([...peersRef.current]);
           }
           break;
+        case "error":
+          clearJoinRetry();
+          setIsRoomReady(false);
+          setRoomJoinError(message.error || "Unable to join room.");
+          if (message.error === "Room not found" || message.error === "Room is full") {
+            setSelectedRoom(null);
+          }
+          break;
         case "room_deleted":
           handleLeaveRoom();
           break;
@@ -368,9 +432,16 @@ function App() {
 
     ws.current.onclose = () => {
       hasAuthedRef.current = false;
+      if (selectedRoomRef.current && !isRoomReadyRef.current) {
+        setRoomJoinError("Connection lost while joining room.");
+      }
+      clearJoinRetry();
     };
 
-    return () => ws.current?.close();
+    return () => {
+      clearJoinRetry();
+      ws.current?.close();
+    };
   }, [authToken]);
 
   useEffect(() => {
@@ -407,9 +478,11 @@ function App() {
   };
 
   const handleLogout = () => {
+    clearJoinRetry();
     setAuthToken(null);
     setUser(null);
     setSelectedRoom(null);
+    setRoomJoinError("");
     localStorage.removeItem("authToken");
     localStorage.removeItem("user");
   };
@@ -464,15 +537,18 @@ function App() {
 
   const handleJoinRoom = (roomId) => {
     if (selectedRoom === roomId) return;
+    clearJoinRetry();
     setSelectedRoom(roomId);
     setIsRoomReady(false);
     setMessages([]);
     setRoomMembers([]);
+    setRoomJoinError("");
     setInviteCopyFeedback("");
     setPomodoroState({ isRunning: false, timeLeft: 1500, isBreak: false });
     setFocusMode(false);
 
     sendJoinRoom(roomId);
+    scheduleJoinRetry(roomId);
 
     // Media is optional and should not block room join/chat/timer.
     initWebRTC();
@@ -491,8 +567,10 @@ function App() {
   };
 
   const handleLeaveRoom = () => {
+    clearJoinRetry();
     setSelectedRoom(null);
     setIsRoomReady(false);
+    setRoomJoinError("");
 
     // Stop local media tracks to free camera
     if (localStream) {
@@ -822,7 +900,7 @@ function App() {
                     onClick={handlePomodoroStart}
                     disabled={!isRoomReady}
                   >
-                    {isRoomReady ? "Start Timer" : "Joining Room..."}
+                    {isRoomReady ? "Start Timer" : roomJoinError || "Joining Room..."}
                   </button>
                 </div>
               ) : (
@@ -875,11 +953,18 @@ function App() {
                 ),
               )}
             </div>
+            {!isRoomReady && (
+              <p className={`join-room-status ${roomJoinError ? "error" : ""}`}>
+                {roomJoinError || "Joining room..."}
+              </p>
+            )}
             <form className="luxe-chat-input" onSubmit={handleSendMessage}>
               <input
                 type="text"
                 placeholder={
-                  isRoomReady ? "Type a message..." : "Joining room..."
+                  isRoomReady
+                    ? "Type a message..."
+                    : roomJoinError || "Joining room..."
                 }
                 value={newMessage}
                 onChange={(e) => setNewMessage(e.target.value)}
