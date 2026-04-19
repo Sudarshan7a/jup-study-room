@@ -1,1 +1,16 @@
-[]
+[
+  {
+    "id": "1776621948554",
+    "name": "sss",
+    "inviteCode": "V7HY1I",
+    "maxMembers": 20,
+    "createdBy": "1776621944648",
+    "messages": [],
+    "focusMode": false,
+    "pomodoroState": {
+      "isRunning": false,
+      "timeLeft": 3239,
+      "isBreak": false
+    }
+  }
+]
